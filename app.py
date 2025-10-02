@@ -1,10 +1,12 @@
 from flask import Flask, render_template, request
 import requests
 from bs4 import BeautifulSoup
+import os
+import re
 
 app = Flask(__name__)
 
-# ======================= GOLLO =======================
+# ------------------ BUSCADOR GOLLO ------------------ #
 def buscar_gollo(producto):
     url = f"https://www.gollo.com/search/{producto.replace(' ', '%20')}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -26,6 +28,7 @@ def buscar_gollo(producto):
                     "nombre_producto": nombre_tag.get_text(strip=True),
                     "url": nombre_tag["href"],
                     "precio": precio_tag.get_text(strip=True) if precio_tag else "No disponible",
+                    "precio_num": float(re.sub(r'[^\d.]', '', precio_tag.get_text())) if precio_tag else float('inf'),
                     "imagen": img_tag["src"] if img_tag else ""
                 })
     except Exception as e:
@@ -33,7 +36,7 @@ def buscar_gollo(producto):
 
     return resultados
 
-# ======================= MONGE =======================
+# ------------------ BUSCADOR MONGE ------------------ #
 def buscar_monge(producto):
     url = f"https://www.tiendamonge.com/catalogsearch/result/?q={producto.replace(' ', '%20')}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -44,18 +47,21 @@ def buscar_monge(producto):
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
-        for item in soup.select("a.result"):
+        for item in soup.select("div.result-wrapper"):
             nombre_tag = item.select_one("h3.result-title")
-            link_tag = item
+            link_tag = item.select_one("a.result")
             precio_tag = item.select_one("span.after_special")
             img_tag = item.select_one("img[itemprop='image']")
 
             if nombre_tag and link_tag:
+                precio_text = precio_tag.get_text(strip=True) if precio_tag else "No disponible"
+                precio_num = float(re.sub(r'[^\d.]', '', precio_text)) if precio_tag else float('inf')
                 resultados.append({
                     "tienda": "Importadora Monge",
                     "nombre_producto": nombre_tag.get_text(strip=True),
-                    "url": "https://www.tiendamonge.com" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"],
-                    "precio": precio_tag.get_text(strip=True) if precio_tag else "No disponible",
+                    "url": link_tag["href"],
+                    "precio": precio_text,
+                    "precio_num": precio_num,
                     "imagen": img_tag["src"] if img_tag else ""
                 })
     except Exception as e:
@@ -63,8 +69,8 @@ def buscar_monge(producto):
 
     return resultados
 
-# ======================= CIUDAD MANGA =======================
-def buscar_ciudadmanga(producto):
+# ------------------ BUSCADOR CIUDAD MANGA ------------------ #
+def buscar_ciudad_manga(producto):
     url = f"https://ciudadmangacr.com/es-cr/search?type=product&q={producto.replace(' ', '%20')}&options%5Bprefix%5D=last"
     headers = {"User-Agent": "Mozilla/5.0"}
     resultados = []
@@ -76,28 +82,26 @@ def buscar_ciudadmanga(producto):
 
         for item in soup.select("div.animated-grid"):
             nombre_tag = item.select_one("a.yv-product-title")
-            link_tag = nombre_tag
             precio_tag = item.select_one("span.yv-product-price")
             img_tag = item.select_one("img.product-first-img")
 
-            if nombre_tag and link_tag:
-                img_url = img_tag["src"] if img_tag else ""
-                if img_url.startswith("//"):
-                    img_url = "https:" + img_url
-
+            if nombre_tag:
+                precio_text = precio_tag.get_text(strip=True) if precio_tag else "No disponible"
+                precio_num = float(re.sub(r'[^\d.]', '', precio_text)) if precio_tag else float('inf')
                 resultados.append({
                     "tienda": "Ciudad Manga CR",
                     "nombre_producto": nombre_tag.get_text(strip=True),
-                    "url": "https://ciudadmangacr.com" + link_tag["href"] if link_tag["href"].startswith("/") else link_tag["href"],
-                    "precio": precio_tag.get_text(strip=True) if precio_tag else "No disponible",
-                    "imagen": img_url
+                    "url": "https://ciudadmangacr.com" + nombre_tag["href"],
+                    "precio": precio_text,
+                    "precio_num": precio_num,
+                    "imagen": "https:" + img_tag["src"] if img_tag else ""
                 })
     except Exception as e:
         print("Error en Ciudad Manga:", e)
 
     return resultados
 
-# ======================= RUTA PRINCIPAL =======================
+# ------------------ RUTA PRINCIPAL ------------------ #
 @app.route("/", methods=["GET", "POST"])
 def index():
     resultados = []
@@ -105,17 +109,12 @@ def index():
         producto = request.form.get("producto")
         resultados += buscar_gollo(producto)
         resultados += buscar_monge(producto)
-        resultados += buscar_ciudadmanga(producto)
-
-        # Ordenar por precio numérico de menor a mayor, ignorando símbolos
-        def parse_precio(p):
-            try:
-                return float(p.replace("₡", "").replace(",", "").replace(".", "").strip())
-            except:
-                return float("inf")
-        resultados.sort(key=lambda x: parse_precio(x["precio"]))
-
+        resultados += buscar_ciudad_manga(producto)
+        # Ordenar todos los resultados por precio_num
+        resultados.sort(key=lambda x: x["precio_num"])
     return render_template("index.html", resultados=resultados)
 
+# ------------------ EJECUTAR APP ------------------ #
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
